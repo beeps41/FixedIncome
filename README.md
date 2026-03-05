@@ -2,7 +2,7 @@
 
 A comprehensive web-based platform for fixed income analytics, credit risk assessment, and portfolio management.
 
-🔗 **[Live Demo](https://fixd-terminal.vercel.app)** *(Deploy to get your actual URL)*
+🔗 **[Live Demo](https://fixd-six.vercel.app/)** *(Deploy to get your actual URL)*
 
 ---
 
