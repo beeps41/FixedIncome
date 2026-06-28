@@ -1,14 +1,117 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useContext, createContext, useMemo } from "react";
 import {
   Line, AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceLine, RadarChart, Radar,
-  PolarGrid, PolarAngleAxis, ComposedChart, PieChart, Pie, Legend
+  PolarGrid, PolarAngleAxis, ComposedChart, PieChart, Pie, Legend,
+  Sankey, Layer, Rectangle
 } from "recharts";
 
 // ─────────────────────────────────────────────────────────────
 // DESIGN
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// THEME HELPERS — derive a full panel palette from one base color
+// ─────────────────────────────────────────────────────────────
+function hexToHsl(hex) {
+  let r = parseInt(hex.slice(1,3),16)/255, g = parseInt(hex.slice(3,5),16)/255, b = parseInt(hex.slice(5,7),16)/255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h, s, l=(max+min)/2;
+  if (max===min) { h=0; s=0; }
+  else {
+    const d=max-min;
+    s = l>0.5 ? d/(2-max-min) : d/(max+min);
+    switch(max){
+      case r: h=((g-b)/d+(g<b?6:0)); break;
+      case g: h=((b-r)/d+2); break;
+      default: h=((r-g)/d+4);
+    }
+    h/=6;
+  }
+  return [h*360, s*100, l*100];
+}
+function hslToHex(h,s,l) {
+  h/=360; s/=100; l/=100;
+  let r,g,b;
+  if (s===0) { r=g=b=l; }
+  else {
+    const hue2rgb=(p,q,t)=>{ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6)return p+(q-p)*6*t; if(t<1/2)return q; if(t<2/3)return p+(q-p)*(2/3-t)*6; return p; };
+    const q = l<0.5 ? l*(1+s) : l+s-l*s, p = 2*l-q;
+    r=hue2rgb(p,q,h+1/3); g=hue2rgb(p,q,h); b=hue2rgb(p,q,h-1/3);
+  }
+  const toHex=(x)=>Math.round(x*255).toString(16).padStart(2,'0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+function adjustLightness(hex, deltaPct) {
+  const [h,s,l] = hexToHsl(hex);
+  return hslToHex(h, s, Math.max(0, Math.min(100, l + deltaPct)));
+}
+function derivePalette(baseHex) {
+  return {
+    paper:  baseHex,
+    panel:  adjustLightness(baseHex, 3),
+    panel2: adjustLightness(baseHex, 6),
+    panel3: adjustLightness(baseHex, 11),
+    rim:    adjustLightness(baseHex, 15),
+    rim2:   adjustLightness(baseHex, 20),
+  };
+}
+const BG_PRESETS = [
+  { name:"Midnight Navy", hex:"#080c14" },
+  { name:"Charcoal",      hex:"#0a0a0a" },
+  { name:"Slate Blue",    hex:"#0d1117" },
+  { name:"Deep Purple",   hex:"#0f0a1a" },
+  { name:"Forest",        hex:"#0a120d" },
+  { name:"Espresso",      hex:"#140f0a" },
+];
+const TEXT_SCALES = [
+  { label:"Small",       value:0.92 },
+  { label:"Normal",      value:1.05 },
+  { label:"Large",       value:1.18 },
+  { label:"Extra Large", value:1.32 },
+];
+const LS_APPEARANCE_KEY = "fixd_appearance_v1";
+
+function loadAppearance() {
+  try {
+    const raw = localStorage.getItem(LS_APPEARANCE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { bgColor: BG_PRESETS[0].hex, textScale: TEXT_SCALES[1].value };
+}
+
+const AppearanceContext = createContext({ bgColor: BG_PRESETS[0].hex, textScale: TEXT_SCALES[1].value });
+const useAppearance = () => useContext(AppearanceContext);
+const SetAppearanceContext = createContext(() => {});
+const useSetAppearance = () => useContext(SetAppearanceContext);
+
+function AppearanceProvider({ children }) {
+  const [appearance, setAppearanceState] = useState(loadAppearance);
+
+  const setAppearance = useCallback((updater) => {
+    setAppearanceState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : { ...prev, ...updater };
+      try { localStorage.setItem(LS_APPEARANCE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const palette = derivePalette(appearance.bgColor);
+    const root = document.documentElement;
+    Object.entries(palette).forEach(([k,v]) => root.style.setProperty(`--${k}`, v));
+    root.style.setProperty('--app-text-scale', appearance.textScale);
+  }, [appearance.bgColor, appearance.textScale]);
+
+  return (
+    <AppearanceContext.Provider value={appearance}>
+      <SetAppearanceContext.Provider value={setAppearance}>
+        {children}
+      </SetAppearanceContext.Provider>
+    </AppearanceContext.Provider>
+  );
+}
+
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
@@ -57,11 +160,13 @@ const CSS = `
     font-family: var(--font-mono);
     background: var(--paper);
     color: var(--txt);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
+
+  .app { zoom: var(--app-text-scale, 1.05); }
 
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: var(--panel); }
@@ -218,18 +323,191 @@ const CSS = `
   @media (max-width: 700px) { .g2 { grid-template-columns: 1fr; } .g3 { grid-template-columns: 1fr; } .g4 { grid-template-columns: 1fr; } .workspace { padding: 12px; } .tbl { font-size: 10px; } .tbl th, .tbl td { padding: 7px 8px; } }
 `;
 
+const SETTINGS_CSS = `
+  .appearance-row { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+  .appearance-label {
+    font-family: var(--font-mono); font-size: 11px; color: var(--txt-dim);
+    min-width: 90px; letter-spacing: 0.04em;
+  }
+  .text-scale-options { display: flex; gap: 6px; flex-wrap: wrap; }
+  .scale-btn {
+    background: var(--panel2); border: 1px solid var(--rim); border-radius: 6px;
+    padding: 7px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--txt-dim);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .scale-btn:hover { border-color: var(--gold); color: var(--txt); }
+  .scale-btn.active { background: var(--gold-lo); border-color: var(--gold); color: var(--gold); font-weight: 700; }
+
+  .bg-swatch-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .bg-swatch {
+    width: 30px; height: 30px; border-radius: 7px; border: 2px solid var(--rim);
+    cursor: pointer; padding: 0; position: relative; transition: all 0.15s;
+  }
+  .bg-swatch:hover { border-color: var(--rim2); transform: scale(1.08); }
+  .bg-swatch.active { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold-glow); }
+  .custom-swatch {
+    display: flex; align-items: center; justify-content: center;
+    background-image: linear-gradient(45deg, #666 25%, transparent 25%), linear-gradient(-45deg, #666 25%, transparent 25%);
+    overflow: hidden;
+  }
+  .custom-swatch input[type="color"] {
+    opacity: 0; width: 100%; height: 100%; cursor: pointer; position: absolute; inset: 0;
+  }
+
+  .settings-btn {
+    width: 30px; height: 30px; border-radius: 6px;
+    border: 1px solid var(--rim); background: var(--panel2);
+    color: var(--txt-dim); cursor: pointer; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  .settings-btn:hover { color: var(--gold); border-color: var(--gold); background: var(--gold-lo); }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(5,6,10,0.75);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; padding: 24px;
+  }
+  .modal-panel {
+    background: var(--panel); border: 1px solid var(--rim2); border-radius: 10px;
+    width: min(880px, 100%); max-height: 88vh; overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--rim);
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em;
+    color: var(--gold); font-weight: 700; position: sticky; top: 0; background: var(--panel);
+  }
+  .modal-close {
+    background: none; border: none; color: var(--txt-dim); cursor: pointer; font-size: 16px;
+  }
+  .modal-close:hover { color: var(--coral); }
+  .modal-body { padding: 20px; }
+  .modal-hint { font-size: 12px; color: var(--txt-dim); line-height: 1.6; margin-bottom: 16px; }
+  .modal-section-title {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+    color: var(--gold); margin: 20px 0 10px; text-transform: uppercase;
+  }
+
+  .ticker-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .ticker-chip {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--panel2); border: 1px solid var(--rim); border-radius: 20px;
+    padding: 5px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--txt);
+  }
+  .ticker-chip.default { border-color: var(--rim2); }
+  .chip-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); }
+  .chip-retry {
+    background: var(--amber-lo); border: none; color: var(--amber); cursor: pointer;
+    font-size: 9px; padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono);
+  }
+  .chip-retry:hover { background: var(--amber); color: #1a1305; }
+  .chip-remove { background: none; border: none; color: var(--txt-faint); cursor: pointer; font-size: 11px; padding: 0; }
+  .chip-remove:hover { color: var(--coral); }
+
+  .ticker-add-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .ticker-input {
+    flex: 1; min-width: 160px; background: var(--panel2); border: 1px solid var(--rim);
+    border-radius: 6px; padding: 8px 10px; color: var(--txt); font-family: var(--font-mono); font-size: 12px;
+  }
+  .ticker-input:focus { outline: none; border-color: var(--gold); }
+  .btn-primary, .btn-secondary, .btn-ghost {
+    border-radius: 6px; padding: 8px 14px; font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.04em; cursor: pointer; border: 1px solid transparent;
+  }
+  .btn-primary { background: var(--gold); color: #1a1305; font-weight: 700; }
+  .btn-primary:hover { background: #ddc06a; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary { background: var(--panel2); border-color: var(--rim2); color: var(--txt); }
+  .btn-secondary:hover { border-color: var(--gold); color: var(--gold); }
+  .btn-ghost { background: none; border-color: var(--rim); color: var(--txt-dim); }
+  .btn-ghost:hover { color: var(--coral); border-color: var(--coral); }
+
+  .fetch-results {
+    background: var(--ink); border: 1px solid var(--rim); border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 14px; font-family: var(--font-mono); font-size: 11px;
+  }
+  .fetch-result-row { padding: 3px 0; }
+  .fetch-result-row.ok { color: var(--sage); }
+  .fetch-result-row.err { color: var(--coral); }
+
+  .bond-terms-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .bond-terms-table th {
+    text-align: left; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.08em;
+    color: var(--txt-faint); padding: 6px 8px; border-bottom: 1px solid var(--rim);
+  }
+  .bond-terms-table td { padding: 4px 8px; border-bottom: 1px solid var(--rim); }
+  .bond-terms-table input {
+    width: 100%; background: var(--panel2); border: 1px solid var(--rim); border-radius: 4px;
+    padding: 4px 6px; color: var(--txt); font-family: var(--font-mono); font-size: 11px;
+  }
+  .bond-terms-table input:focus { outline: none; border-color: var(--gold); }
+  .live-tag {
+    font-size: 8px; background: var(--sage-lo); color: var(--sage); border-radius: 3px;
+    padding: 1px 4px; margin-left: 6px; letter-spacing: 0.05em;
+  }
+`;
+
 // ─────────────────────────────────────────────────────────────
 // DATA
 // ─────────────────────────────────────────────────────────────
 const CURRENT_YEAR = new Date().getFullYear();
 
-const COMPANIES = {
+const DEFAULT_COMPANIES = {
   F:   { name:"Ford Motor Co.",      sector:"Auto",     rating:"BB+", watch:"Stable",   revenue:185000, ebitda:13200, ebit:8700,  netIncome:1800,  totalDebt:47500, cash:28000, assets:242000, equity:44000, intExp:2900, capex:8000, depr:4700, ocf:14500, coupon:6.100, maturity:2032, spread:260, isin:"US345370CU51" },
   GM:  { name:"General Motors Co.",  sector:"Auto",     rating:"BBB-",watch:"Positive",  revenue:187000, ebitda:16400, ebit:11000, netIncome:6000,  totalDebt:32000, cash:22000, assets:228000, equity:48000, intExp:2100, capex:8500, depr:4500, ocf:17000, coupon:5.400, maturity:2033, spread:175, isin:"US37045VAL55" },
   DAL: { name:"Delta Air Lines",     sector:"Airlines", rating:"BB",  watch:"Stable",   revenue:61600,  ebitda:9800,  ebit:6000,  netIncome:3000,  totalDebt:21500, cash:8000,  assets:74000,  equity:9500,  intExp:1200, capex:6000, depr:3800, ocf:8500,  coupon:7.000, maturity:2029, spread:310, isin:"US247361ZX75" },
   PFE: { name:"Pfizer Inc.",         sector:"Pharma",   rating:"A",   watch:"Negative",  revenue:63600,  ebitda:18000, ebit:13500, netIncome:8100,  totalDebt:30500, cash:10200, assets:170000, equity:90000, intExp:1500, capex:3400, depr:4200, ocf:13500, coupon:4.100, maturity:2034, spread:105, isin:"US717081EU66" },
   CCL: { name:"Carnival Corp.",      sector:"Leisure",  rating:"B+",  watch:"Positive",  revenue:25000,  ebitda:7000,  ebit:4800,  netIncome:2100,  totalDebt:27000, cash:6500,  assets:54000,  equity:11500, intExp:1600, capex:4500, depr:2300, ocf:6500,  coupon:9.875, maturity:2027, spread:450, isin:"US143658BQ29" },
 };
+
+// ─────────────────────────────────────────────────────────────
+// COMPANIES CONTEXT
+// Holds the active issuer universe. Starts from DEFAULT_COMPANIES and
+// can be extended/overridden via the Settings panel, which pulls live
+// 10-K financials from SEC EDGAR (see api/company-data.js) and persists
+// the resulting dataset (plus the user's ticker watchlist) to localStorage.
+// ─────────────────────────────────────────────────────────────
+const LS_COMPANIES_KEY = "fixd_companies_v1";
+const LS_TICKERS_KEY = "fixd_selected_tickers_v1";
+
+const CompaniesContext = createContext(DEFAULT_COMPANIES);
+const useCompanies = () => useContext(CompaniesContext);
+
+const SetCompaniesContext = createContext(() => {});
+const useSetCompanies = () => useContext(SetCompaniesContext);
+
+function loadStoredCompanies() {
+  try {
+    const raw = localStorage.getItem(LS_COMPANIES_KEY);
+    if (!raw) return DEFAULT_COMPANIES;
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_COMPANIES, ...parsed };
+  } catch {
+    return DEFAULT_COMPANIES;
+  }
+}
+
+function CompaniesProvider({ children }) {
+  const [companies, setCompaniesState] = useState(loadStoredCompanies);
+
+  const setCompanies = useCallback((updater) => {
+    setCompaniesState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try { localStorage.setItem(LS_COMPANIES_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  return (
+    <CompaniesContext.Provider value={companies}>
+      <SetCompaniesContext.Provider value={setCompanies}>
+        {children}
+      </SetCompaniesContext.Provider>
+    </CompaniesContext.Provider>
+  );
+}
 
 const TREAS_CURVE = [
   { t:0.25, y:4.32 }, { t:0.5, y:4.28 }, { t:1, y:4.20 }, { t:2, y:4.15 },
@@ -321,10 +599,124 @@ const calcMetrics = (co) => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// INCOME STATEMENT SANKEY — Revenue → Operating Profit/Expenses → Net Profit/Interest/Tax
+// Built from the same fields shown in the Income Statement card; styled
+// after the "How They Make Money" Sankey format (green = profit flows,
+// red = cost flows).
+// ─────────────────────────────────────────────────────────────
+function buildIncomeSankey(co) {
+  const revenue   = co.revenue;
+  const opProfit  = co.ebit;
+  const opExpense = Math.max(0, revenue - opProfit);
+  const intExp    = Math.max(0, co.intExp || 0);
+  const netProfit = Math.max(0, co.netIncome || 0);
+  // Tax is a residual: whatever's left of operating profit after interest
+  // and net income (clamped at 0 since we don't have a direct tax tag).
+  const tax = Math.max(0, opProfit - intExp - netProfit);
+  const otherBelowLine = Math.max(0, opProfit - intExp - tax - netProfit); // rounding slack, if any
+
+  const nodes = [
+    { name: "Revenue" },                          // 0
+    { name: "Operating Profit" },                  // 1
+    { name: "Operating Expenses" },                 // 2
+    { name: "Net Profit" },                          // 3
+    { name: "Interest Expense" },                     // 4
+    { name: "Tax" },                                   // 5
+  ];
+  const links = [
+    { source: 0, target: 1, value: round1(opProfit) },
+    { source: 0, target: 2, value: round1(opExpense) },
+    { source: 1, target: 3, value: round1(netProfit) },
+    { source: 1, target: 4, value: round1(intExp) },
+    { source: 1, target: 5, value: round1(tax) },
+  ];
+  if (otherBelowLine > 0.5) {
+    nodes.push({ name: "Other" });
+    links.push({ source: 1, target: 6, value: round1(otherBelowLine) });
+  }
+  return { nodes, links: links.filter(l => l.value > 0) };
+}
+const round1 = (n) => Math.round(n * 10) / 10;
+
+// Colors pulled straight from the app's own theme variables (see :root in
+// CSS) so the Sankey reads as part of FIXD rather than a generic chart.
+const SANKEY_NODE_COLOR = {
+  "Revenue": "#7eb8f7",            // --ice
+  "Operating Profit": "#4ade80",   // --sage
+  "Operating Expenses": "#fb7185", // --coral
+  "Net Profit": "#4ade80",         // --sage
+  "Interest Expense": "#fb7185",   // --coral
+  "Tax": "#fbbf24",                // --amber
+  "Other": "#c9a84c",              // --gold
+};
+const SANKEY_LINK_COLOR = {
+  "Operating Profit": "#4ade80",
+  "Operating Expenses": "#fb7185",
+  "Net Profit": "#4ade80",
+  "Interest Expense": "#fb7185",
+  "Tax": "#fbbf24",
+  "Other": "#c9a84c",
+};
+
+const SankeyNode = (props) => {
+  const { x, y, width, height, payload } = props;
+  const color = SANKEY_NODE_COLOR[payload.name] || "#7eb8f7";
+  const isLeft = x < 60;
+  return (
+    <Layer key={`node-${payload.name}`}>
+      <Rectangle x={x} y={y} width={Math.max(width, 5)} height={height} fill={color} fillOpacity={1} radius={2} />
+      {/* Text gets a dark outline (paint-order stroke) so it stays legible
+          no matter what color ribbon happens to pass underneath it. */}
+      <text
+        textAnchor={isLeft ? "start" : "end"}
+        x={isLeft ? x + width + 10 : x - 10}
+        y={y + height / 2 - 7}
+        fontSize={12}
+        fontFamily="var(--font-mono)"
+        fontWeight={700}
+        fill="#ffffff"
+        paintOrder="stroke"
+        stroke="#080c14"
+        strokeWidth={4}
+        strokeLinejoin="round"
+      >
+        {payload.name}
+      </text>
+      <text
+        textAnchor={isLeft ? "start" : "end"}
+        x={isLeft ? x + width + 10 : x - 10}
+        y={y + height / 2 + 10}
+        fontSize={11}
+        fontFamily="var(--font-mono)"
+        fontWeight={600}
+        fill={color}
+        paintOrder="stroke"
+        stroke="#080c14"
+        strokeWidth={4}
+        strokeLinejoin="round"
+      >
+        {fmtB(payload.value)}
+      </text>
+    </Layer>
+  );
+};
+
+const SankeyLink = (props) => {
+  const { sourceX, sourceY, sourceControlX, targetControlX, targetX, targetY, linkWidth, payload } = props;
+  const targetName = payload?.target?.name;
+  const color = SANKEY_LINK_COLOR[targetName] || "#7eb8f7";
+  const path = `M${sourceX},${sourceY}C${sourceControlX},${sourceY} ${targetControlX},${targetY} ${targetX},${targetY}`;
+  return (
+    <path d={path} fill="none" stroke={color} strokeWidth={linkWidth} strokeOpacity={0.32} />
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
 // EXPLAINABILITY SCORE ENGINE
 // ─────────────────────────────────────────────────────────────
 const calcCreditScore = (co, m) => {
   const factors = [];
+
   let total = 0;
 
   // ── Leverage (max 25 pts) ──
@@ -476,6 +868,7 @@ const CustomTooltip = ({ active, payload, label, extra }) => {
 // EXPLAINABILITY SCORE PANEL  
 // ─────────────────────────────────────────────────────────────
 const ScorePanel = ({ ticker }) => {
+  const COMPANIES = useCompanies();
   const co = COMPANIES[ticker];
   const m  = calcMetrics(co);
   const score = calcCreditScore(co, m);
@@ -685,9 +1078,11 @@ const DataFetcher = ({ onData }) => {
 
 // ─────────────────────────────────────────────────────────────
 // AI CREDIT MEMO
-// In GitHub/Vercel deployment: calls /api/memo proxy endpoint
+// Calls the /api/memo serverless proxy (keeps ANTHROPIC_API_KEY
+// server-side — see vercel dev / Vercel deployment instructions).
 // ─────────────────────────────────────────────────────────────
 const CreditMemoPanel = ({ ticker, liveYieldCurve }) => {
+  const COMPANIES = useCompanies();
   const co = COMPANIES[ticker];
   const m  = calcMetrics(co);
   const [memo, setMemo]       = useState("");
@@ -750,7 +1145,7 @@ End with: VERDICT:{"lend":true/false,"suggestedSpread":NNN,"rationale":"one sent
       }
       setMemo(text);
     } catch(e) {
-      setError(`Could not generate memo: ${e.message}. Ensure ANTHROPIC_API_KEY is set in your deployment environment.`);
+      setError(`Could not generate memo: ${e.message}. Ensure ANTHROPIC_API_KEY is set in your deployment environment (or run "vercel dev" locally).`);
     }
     setLoading(false);
   };
@@ -842,6 +1237,7 @@ End with: VERDICT:{"lend":true/false,"suggestedSpread":NNN,"rationale":"one sent
 // CREDIT ANALYSIS TAB
 // ─────────────────────────────────────────────────────────────
 const CreditTab = ({ liveYieldCurve }) => {
+  const COMPANIES = useCompanies();
   const tickers = Object.keys(COMPANIES);
   const [sel, setSel] = useState("F");
   const [view, setView] = useState("score");
@@ -986,6 +1382,38 @@ const CreditTab = ({ liveYieldCurve }) => {
         </div>
       )}
 
+      {view==="statements" && (() => {
+        const sankeyData = buildIncomeSankey(co);
+        return (
+          <div className="card" style={{marginTop:20}}>
+            <div className="card-title">{co.name.toUpperCase()} — INCOME STATEMENT FLOW ({sel})</div>
+            <div style={{fontSize:10,color:'var(--txt-faint)',fontFamily:'var(--font-mono)',marginBottom:8,letterSpacing:'0.04em'}}>
+              REVENUE {fmtB(co.revenue)} → OPERATING PROFIT/EXPENSES → NET PROFIT/INTEREST/TAX
+            </div>
+            <ResponsiveContainer width="100%" height={460}>
+              <Sankey
+                data={sankeyData}
+                node={<SankeyNode />}
+                link={<SankeyLink />}
+                nodePadding={56}
+                nodeWidth={10}
+                linkCurvature={0.55}
+                margin={{ top: 20, bottom: 20, left: 140, right: 140 }}
+              >
+                <Tooltip
+                  formatter={(value) => fmtB(value)}
+                  contentStyle={{ background:'var(--panel2)', border:'1px solid var(--rim)', borderRadius:6, fontSize:11, fontFamily:'var(--font-mono)' }}
+                  labelStyle={{ color:'var(--txt)' }}
+                />
+              </Sankey>
+            </ResponsiveContainer>
+            <div style={{fontSize:9,color:'var(--txt-faint)',fontFamily:'var(--font-mono)',marginTop:6}}>
+              Tax shown is a residual estimate (Operating Profit − Interest − Net Income); SEC filings/financials don't always break out a standalone tax line.
+            </div>
+          </div>
+        );
+      })()}
+
       {view==="altman" && (
         <div className="g2">
           <div className="card" style={{textAlign:'center',display:'flex',flexDirection:'column',justifyContent:'center',alignItems:'center',padding:40}}>
@@ -1038,6 +1466,7 @@ const CreditTab = ({ liveYieldCurve }) => {
 // BOND PRICING TAB
 // ─────────────────────────────────────────────────────────────
 const BondTab = ({ liveYieldCurve }) => {
+  const COMPANIES = useCompanies();
   const curve = liveYieldCurve || TREAS_CURVE;
   const [face, setFace]     = useState(1000);
   const [coupon, setCoupon] = useState(5.0);
@@ -1206,6 +1635,29 @@ const PORT_POSITIONS = [
   { ticker:"CCL", weight:10, notional:1e6 },
 ];
 
+const TOTAL_PORTFOLIO_NOTIONAL = PORT_POSITIONS.reduce((s,p)=>s+p.notional,0); // $10mm
+
+// Builds the live portfolio position list from whatever tickers currently
+// exist in `companies`. Tickers from the original 5 keep their original
+// weights; any ticker added via Settings gets folded in at an equal share
+// of the pool, with everything renormalized back to 100% / $10mm total —
+// so every dashboard/portfolio widget reflects the live company universe.
+function buildActivePositions(companies) {
+  const tickers = Object.keys(companies);
+  const base = PORT_POSITIONS.filter(p => tickers.includes(p.ticker));
+  const extras = tickers.filter(t => !base.some(p => p.ticker === t));
+  if (extras.length === 0) return base;
+
+  const n = base.length + extras.length;
+  const equalWeight = 100 / n;
+  const rescale = base.length > 0 ? (100 - equalWeight * extras.length) / 100 : 0;
+
+  const rescaledBase = base.map(p => ({ ...p, weight: p.weight * rescale }));
+  const extraPositions = extras.map(t => ({ ticker: t, weight: equalWeight, notional: 0 }));
+  const combined = [...rescaledBase, ...extraPositions];
+  return combined.map(p => ({ ...p, notional: TOTAL_PORTFOLIO_NOTIONAL * p.weight / 100 }));
+}
+
 const SHOCKS = [
   { label:"-200bps", bps:-200, color:"#4ade80" },
   { label:"-100bps", bps:-100, color:"#86efac" },
@@ -1220,8 +1672,10 @@ const SECTOR_COLORS = { Auto:"#7eb8f7", Airlines:"#fbbf24", Pharma:"#4ade80", Le
 const RATING_COLORS = { "A":"#4ade80", "BBB-":"#7eb8f7", "BB+":"#fbbf24", "BB":"#fbbf24", "B+":"#fb7185" };
 
 const PortfolioTab = ({ liveYieldCurve }) => {
+  const COMPANIES = useCompanies();
   const curve = liveYieldCurve || TREAS_CURVE;
-  const positions = PORT_POSITIONS.map(pos => {
+  const activePortPositions = buildActivePositions(COMPANIES);
+  const positions = activePortPositions.map(pos => {
     const co=COMPANIES[pos.ticker], matY=co.maturity-CURRENT_YEAR;
     const bench=interpYield(matY,curve), ytm=bench+co.spread/100;
     const price=bondPrice(1000,co.coupon,ytm,matY), md=modDur(1000,co.coupon,ytm,matY);
@@ -1468,11 +1922,12 @@ const PortfolioTab = ({ liveYieldCurve }) => {
 // DASHBOARD TAB
 // ─────────────────────────────────────────────────────────────
 const DashboardTab = ({ liveYieldCurve, setLiveYieldCurve }) => {
+  const COMPANIES = useCompanies();
   const tickers = Object.keys(COMPANIES);
   const allM = tickers.map(t=>({ticker:t,...COMPANIES[t],...calcMetrics(COMPANIES[t])}));
   const curve = liveYieldCurve || TREAS_CURVE;
 
-  const portStats = PORT_POSITIONS.map(pos=>{
+  const portStats = buildActivePositions(COMPANIES).map(pos=>{
     const co=COMPANIES[pos.ticker], matY=co.maturity-CURRENT_YEAR;
     const bench=interpYield(matY,curve), ytm=bench+co.spread/100;
     const price=bondPrice(1000,co.coupon,ytm,matY), md=modDur(1000,co.coupon,ytm,matY);
@@ -1503,7 +1958,7 @@ const DashboardTab = ({ liveYieldCurve, setLiveYieldCurve }) => {
 
       <div className="g5">
         {[
-          ["Coverage Universe","5 Companies","var(--ice)","Multi-sector HY/IG"],
+          ["Coverage Universe",`${tickers.length} Companies`,"var(--ice)","Multi-sector HY/IG"],
           ["Avg OAS Spread",`${Math.round(tickers.reduce((s,t)=>s+COMPANIES[t].spread,0)/tickers.length)}bps`,"var(--amber)","Universe average"],
           ["Portfolio DV01",`$${totalDV01.toFixed(0)}`,"var(--coral)","Per basis point"],
           ["Avg Mod. Duration",`${avgDur.toFixed(2)}y`,"var(--gold)","Weighted"],
@@ -1617,11 +2072,266 @@ const DashboardTab = ({ liveYieldCurve, setLiveYieldCurve }) => {
 // ─────────────────────────────────────────────────────────────
 // ROOT APP
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// SETTINGS PANEL — manage the issuer watchlist & pull live 10-K data
+// ─────────────────────────────────────────────────────────────
+function loadStoredTickers() {
+  try {
+    const raw = localStorage.getItem(LS_TICKERS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return Object.keys(DEFAULT_COMPANIES);
+}
+
+const SettingsPanel = ({ onClose }) => {
+  const companies = useCompanies();
+  const setCompanies = useSetCompanies();
+  const appearance = useAppearance();
+  const setAppearance = useSetAppearance();
+  const [customColor, setCustomColor] = useState(appearance.bgColor);
+  const [tickers, setTickers] = useState(loadStoredTickers);
+  const [newTicker, setNewTicker] = useState("");
+  const [fetching, setFetching] = useState(false);
+  const [results, setResults] = useState(null); // { results:{}, errors:{} }
+  const [editTicker, setEditTicker] = useState(null); // ticker whose bond terms are being edited
+
+  const persistTickers = (next) => {
+    setTickers(next);
+    try { localStorage.setItem(LS_TICKERS_KEY, JSON.stringify(next)); } catch {}
+  };
+
+  const addTicker = async () => {
+    const t = newTicker.trim().toUpperCase();
+    if (!t || tickers.includes(t)) { setNewTicker(""); return; }
+    const nextTickers = [...tickers, t];
+    persistTickers(nextTickers);
+    setNewTicker("");
+    // Immediately fetch & save this ticker's data so "Add" alone is enough —
+    // no separate "Fetch Live Data" click required for it to persist.
+    const data = await fetchLiveDataFor([t]);
+    const ok = data && data.results && data.results[t];
+    if (!ok) {
+      // Fetch failed (network issue, ticker not found, etc.) — still save a
+      // minimal placeholder so the ticker isn't silently missing. User can
+      // fill in numbers by hand or retry the fetch later.
+      setCompanies(prev => (prev[t] ? prev : {
+        ...prev,
+        [t]: {
+          name: t, sector: "Other", rating: "NR", watch: "Stable",
+          revenue: 1000, ebitda: 150, ebit: 100, netIncome: 50, totalDebt: 500, cash: 100,
+          assets: 2000, equity: 800, intExp: 30, capex: 50, depr: 50, ocf: 100,
+          coupon: 5.000, maturity: new Date().getFullYear() + 7, spread: 200, isin: "",
+          _live: false, _placeholder: true,
+        },
+      }));
+    }
+  };
+
+  const removeTicker = (t) => {
+    if (DEFAULT_COMPANIES[t]) return; // keep the base universe intact
+    persistTickers(tickers.filter(x => x !== t));
+    setCompanies(prev => {
+      const next = { ...prev };
+      delete next[t];
+      return next;
+    });
+  };
+
+  const fetchLiveDataFor = async (tickerList) => {
+    setFetching(true);
+    setResults(null);
+    try {
+      const res = await fetch(`/api/company-data?tickers=${encodeURIComponent(tickerList.join(","))}`);
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        // Plain `npm run dev` (Vite only) doesn't execute /api/* serverless
+        // functions — it just serves the source file as static text, which
+        // is what's landing here instead of JSON.
+        throw new Error(
+          "/api/company-data didn't return JSON — the serverless function isn't running. " +
+          "Stop the current dev server and run `vercel dev` instead of `npm run dev` " +
+          "(requires `npm install -g vercel` once). Plain `npm run dev` only serves the " +
+          "React app, not the api/ functions."
+        );
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setResults(data);
+      if (data.results && Object.keys(data.results).length) {
+        setCompanies(prev => {
+          const next = { ...prev };
+          for (const [t, c] of Object.entries(data.results)) {
+            // Preserve existing bond terms (rating/coupon/spread/etc.) if this
+            // ticker already exists — only refresh the financial-statement fields.
+            const existingBondTerms = prev[t]
+              ? { sector: prev[t].sector, rating: prev[t].rating, watch: prev[t].watch,
+                  coupon: prev[t].coupon, maturity: prev[t].maturity, spread: prev[t].spread, isin: prev[t].isin }
+              : { sector: c.sector, rating: c.rating, watch: c.watch, coupon: c.coupon, maturity: c.maturity, spread: c.spread, isin: c.isin };
+            next[t] = { ...c, ...existingBondTerms, _live: true, _asOf: c.asOf, _fy: c.fiscalYear };
+          }
+          return next;
+        });
+      }
+      return data;
+    } catch (e) {
+      setResults({ results: {}, errors: { _global: e.message } });
+      return null;
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const fetchLiveData = () => fetchLiveDataFor(tickers);
+
+  const updateBondTerm = (t, field, value) => {
+    setCompanies(prev => ({ ...prev, [t]: { ...prev[t], [field]: value } }));
+  };
+
+  const resetToDefaults = () => {
+    setCompanies(DEFAULT_COMPANIES);
+    persistTickers(Object.keys(DEFAULT_COMPANIES));
+    setResults(null);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-panel" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>SETTINGS — ISSUER WATCHLIST & LIVE DATA</div>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          <div className="modal-section-title">Appearance</div>
+          <div className="appearance-row">
+            <div className="appearance-label">Text Size</div>
+            <div className="text-scale-options">
+              {TEXT_SCALES.map(opt => (
+                <button
+                  key={opt.label}
+                  className={`scale-btn${Math.abs(appearance.textScale - opt.value) < 0.001 ? ' active' : ''}`}
+                  onClick={() => setAppearance({ textScale: opt.value })}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="appearance-row">
+            <div className="appearance-label">Background</div>
+            <div className="bg-swatch-row">
+              {BG_PRESETS.map(p => (
+                <button
+                  key={p.hex}
+                  title={p.name}
+                  className={`bg-swatch${appearance.bgColor.toLowerCase() === p.hex.toLowerCase() ? ' active' : ''}`}
+                  style={{ background: p.hex }}
+                  onClick={() => { setAppearance({ bgColor: p.hex }); setCustomColor(p.hex); }}
+                />
+              ))}
+              <label className="bg-swatch custom-swatch" title="Custom color" style={{ background: customColor }}>
+                <input
+                  type="color"
+                  value={customColor}
+                  onChange={e => { setCustomColor(e.target.value); setAppearance({ bgColor: e.target.value }); }}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="modal-section-title">Issuer Watchlist</div>
+          <p className="modal-hint">
+            Add any US-listed ticker, then fetch its latest 10-K financials directly from SEC EDGAR
+            (free, no API key). Credit ratings, coupons, maturities, and OAS spreads aren't published
+            by the SEC — those come back as editable placeholders.
+          </p>
+
+          <div className="ticker-chips">
+            {tickers.map(t => (
+              <div key={t} className={`ticker-chip${DEFAULT_COMPANIES[t] ? ' default' : ''}`}>
+                <span>{t}</span>
+                {companies[t]?._live && <span className="chip-live-dot" title={`Live as of ${companies[t]._asOf}`} />}
+                {companies[t]?._placeholder && (
+                  <button className="chip-retry" title="Live fetch failed — click to retry" onClick={() => fetchLiveDataFor([t])}>⚠ retry</button>
+                )}
+                {!DEFAULT_COMPANIES[t] && (
+                  <button className="chip-remove" onClick={() => removeTicker(t)}>✕</button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="ticker-add-row">
+            <input
+              className="ticker-input"
+              placeholder="Add ticker e.g. AAPL"
+              value={newTicker}
+              onChange={e => setNewTicker(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addTicker()}
+            />
+            <button className="btn-secondary" onClick={addTicker}>+ Add</button>
+            <button className="btn-primary" onClick={fetchLiveData} disabled={fetching}>
+              {fetching ? "Fetching…" : "↻ Fetch Live Data"}
+            </button>
+            <button className="btn-ghost" onClick={resetToDefaults}>Reset to Defaults</button>
+          </div>
+
+          {results && (
+            <div className="fetch-results">
+              {Object.entries(results.results || {}).map(([t, c]) => (
+                <div key={t} className="fetch-result-row ok">
+                  ✓ {t} — {c.name} · FY{c.fiscalYear} 10-K (as of {c.asOf}) · Revenue {fmtB(c.revenue)} · EBITDA {fmtB(c.ebitda)}
+                </div>
+              ))}
+              {Object.entries(results.errors || {}).map(([t, msg]) => (
+                <div key={t} className="fetch-result-row err">✕ {t === "_global" ? "" : t + " — "}{msg}</div>
+              ))}
+            </div>
+          )}
+
+          <div className="modal-section-title">Bond / Credit Terms (not available from SEC — edit as needed)</div>
+          <table className="bond-terms-table">
+            <thead>
+              <tr><th>Ticker</th><th>Sector</th><th>Rating</th><th>Coupon %</th><th>Maturity</th><th>OAS bps</th></tr>
+            </thead>
+            <tbody>
+              {tickers.filter(t => companies[t]).map(t => {
+                const c = companies[t];
+                return (
+                  <tr key={t}>
+                    <td>{t}{c._live && <span className="live-tag">LIVE</span>}</td>
+                    <td><input value={c.sector} onChange={e => updateBondTerm(t, "sector", e.target.value)} /></td>
+                    <td><input value={c.rating} onChange={e => updateBondTerm(t, "rating", e.target.value)} /></td>
+                    <td><input type="number" step="0.001" value={c.coupon} onChange={e => updateBondTerm(t, "coupon", parseFloat(e.target.value) || 0)} /></td>
+                    <td><input type="number" value={c.maturity} onChange={e => updateBondTerm(t, "maturity", parseInt(e.target.value) || CURRENT_YEAR + 5)} /></td>
+                    <td><input type="number" value={c.spread} onChange={e => updateBondTerm(t, "spread", parseFloat(e.target.value) || 0)} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
+  return (
+    <CompaniesProvider>
+      <AppearanceProvider>
+        <AppShell />
+      </AppearanceProvider>
+    </CompaniesProvider>
+  );
+}
+
+function AppShell() {
   const [tab, setTab]               = useState("dashboard");
   const [time, setTime]             = useState(new Date());
   const [liveYieldCurve, setLiveYieldCurve] = useState(null);
   const [dataStatus, setDataStatus] = useState("static");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleLiveData = useCallback((curve) => {
     setLiveYieldCurve(curve);
@@ -1643,6 +2353,7 @@ export default function App() {
   return (
     <>
       <style>{CSS}</style>
+      <style>{SETTINGS_CSS}</style>
       <div className="app">
         <div className="topbar">
           <div className="brand">
@@ -1669,6 +2380,7 @@ export default function App() {
               <div style={{fontSize:9,color:'var(--txt-faint)',fontFamily:'var(--font-mono)',letterSpacing:'0.05em'}}>DATA: FEB 2026</div>
             )}
             <div className="clock">{time.toUTCString().slice(0,25)}</div>
+            <button className="settings-btn" title="Settings" onClick={() => setSettingsOpen(true)}>⚙</button>
           </div>
         </div>
 
@@ -1679,6 +2391,8 @@ export default function App() {
           {tab==="portfolio" && <PortfolioTab liveYieldCurve={liveYieldCurve}/>}
         </div>
       </div>
+
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
     </>
   );
 }
